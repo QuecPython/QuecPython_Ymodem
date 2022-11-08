@@ -78,6 +78,11 @@ ymodem.exe "COM63" "[run_std_1.log, /usr/run_std_1.log]" ...
 
 注意:使用前需要模组端先传入接收协议代码,当前为demo测试版本需要自行传入，后续集成至固件之后不需要进行此步操作
 
+#### 执行结果判断
+
+- 输出 QuecPython File Download Success 表示成功
+- 输出 QuecPython File Download Failure 表示失败
+
 将文件包中**ymodem.py**代码传入模块中即可
 
 ## 接收端使用方法

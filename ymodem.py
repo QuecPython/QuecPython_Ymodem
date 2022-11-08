@@ -14,18 +14,14 @@
 
 # -*- coding:utf-8 -*-
 
-import log
+
 import uos
-import usys
 import ql_fs
 import utime as time
 from machine import UART
 from machine import Timer
 from queue import Queue
-
-log.set_output(usys.stdout)
-log.basicConfig(level=log.INFO)
-logger = log.getLogger("Ymodem")
+from machine import Pin
 
 SOH = b'\x01'
 STX = b'\x02'
@@ -134,22 +130,6 @@ class Modem(object):
         self._recv_file_mtime = 0
         self._recv_mode = 0
         self._recv_sn = 0
-        '''
-        YMODEM Header Information and Features
-        _____________________________________________________________
-        | Program   | Length | Date | Mode | S/N | 1k-Blk | YMODEM-g |
-        |___________|________|______|______|_____|________|__________|
-        |Unix rz/sz | yes    | yes  | yes  | no  | yes    | sb only  |
-        |___________|________|______|______|_____|________|__________|
-        |VMS rb/sb  | yes    | no   | no   | no  | yes    | no       |
-        |___________|________|______|______|_____|________|__________|
-        |Pro-YAM    | yes    | yes  | no   | yes | yes    | yes      |
-        |___________|________|______|______|_____|________|__________|
-        |CP/M YAM   | no     | no   | no   | no  | yes    | no       |
-        |___________|________|______|______|_____|________|__________|
-        |KMD/IMP    | ?      | no   | no   | no  | yes    | no       |
-        |___________|________|______|______|_____|________|__________|
-        '''
 
     def abort(self, count=2):
         for _ in range(count):
@@ -161,154 +141,132 @@ class Modem(object):
         """
         Parse the first package of YMODEM Batch Transmission to get the target file information
         """
-        stream = None
-        char = self._in_transfer_mode(crc_mode, retry, delay)
-        if char is not None:
-            stream = self._get_file_header(char, crc_mode)
-        if stream is not None:
-            char = self._in_transfer_mode(crc_mode, retry, delay)
-        else:
-            return None
-        # start file content stream transfer
-        success_count = 0
-        income_size = 0
-        packet_size = 128
-        sequence = 1
-        cancel = 0
-        write_packet = b""
-        while True:
-            error_count = 0
-            while True:
-                if char == SOH:
-                    if packet_size != 128:
-                        packet_size = 128
-                        logger.info("[Receiver]: Set 128 bytes for packet_size")
-                    break
-                elif char == STX:
-                    if packet_size != 1024:
-                        packet_size = 1024
-                        logger.info("[Receiver]: Set 1024 bytes for packet_size")
-                    break
-                elif char == EOT:
-                    if cancel:
-                        self.writer(ACK)
-                        logger.info("[Receiver]: Transmission finished (%d bytes)", income_size)
-                        # return income_size
-                        stream.close()
-                        if callable(callback):
-                            callback(self._recv_file_name, income_size)   # 传输的文件&文件size
-                        self.recv()
-                        return True
-                    else:
-                        cancel = 1
-                        self.writer(NAK)
-                        logger.info(
-                            "[Receiver]: Ready for transmission cancellation (EOT) at data block {} (seq {})".format(
-                                success_count, sequence))
-                        char = self.reader(1, timeout)
-                elif char == CAN:
-                    if cancel:
-                        logger.info("[Receiver]: Transmission cancelled (CAN) at data block {} (seq {})".format(success_count, sequence))
-                        self._delete_failed_file(self._recv_file_name)    # delete transfer failed file
-                        return None
-                    else:
-                        cancel = 1
-                        logger.info("[Receiver]: Ready for transmission cancellation (CAN) at data block {} (seq {})".format(success_count, sequence))
-                        char = self.reader(1, timeout)
-                else:
-                    logger.info("[Receiver]: Error, expected SOH/STX EOT CAN but got {0!r}".format(char))
-                    error_count += 1
-                    char = self.reader(1, timeout)
-                    if error_count > retry:
-                        logger.info("[Receiver]: Error, error_count reached {}, aborting...".format(retry))
-                        self.abort()
-                        return None
-            if not self._verify_complement(packet_size, crc_mode, timeout, sequence):
-                pass
-            # Packet received
+        try:
+            stream = None
+            char = self._in_transfer_mode(crc_mode, 100, delay)
+            if char is not None:
+                stream = self._get_file_header(char, crc_mode)
+            if stream is not None:
+                char = self._in_transfer_mode(crc_mode, retry, delay)
             else:
-                data = self.reader(packet_size + 1 + crc_mode)
-                if data and len(data) == (packet_size + 1 + crc_mode):
-                    valid, data = self._verify_recv_checksum(crc_mode, data)
-                    # Write the original data to the target file
-                    if valid:
-                        success_count += 1
-                        logger.info('[Receiver]: Data block %d (seq=%d) OK', success_count, sequence)
-                        valid_length = packet_size
-                        # The last package adjusts the valid data length according to the file length
-                        if self._remaining_data_length > 0:
-                            valid_length = min(valid_length, self._remaining_data_length)
-                            self._remaining_data_length -= valid_length
-                        write_packet += data[:valid_length]
-                        income_size += len(data)
-                        if len(write_packet) not in (0, 1024, 2048, 3072, 4096):     # 4k byte packet write
-                            try:
-                                stream.write(write_packet)
-                            except IOError as e:
-                                logger.error('[Receiver]: write error :{}'.format(e))
-                                stream.close()
-                            write_packet = b""
-                            logger.info('[Receiver]: write Data block OK')
-                        self.writer(ACK)
-                        sequence = (sequence + 1) % 0x100
+                return None
+            success_count = 0
+            income_size = 0
+            packet_size = 128
+            sequence = 1
+            cancel = 0
+            write_packet = b""
+            while True:
+                error_count = 0
+                while True:
+                    if char == SOH:
+                        if packet_size != 128:
+                            packet_size = 128
+                        break
+                    elif char == STX:
+                        if packet_size != 1024:
+                            packet_size = 1024
+                        break
+                    elif char == EOT:
+                        if cancel:
+                            self.writer(ACK)
+                            stream.close()
+                            if callable(callback):
+                                callback(self._recv_file_name, income_size)
+                            self.recv()
+                            return True
+                        else:
+                            cancel = 1
+                            self.writer(NAK)
+                            char = self.reader(1, timeout)
+                    elif char == CAN:
+                        if cancel:
+                            self._delete_failed_file(self._recv_file_name)
+                            return None
+                        else:
+                            cancel = 1
+                            char = self.reader(1, timeout)
+                    else:
+                        error_count += 1
                         char = self.reader(1, timeout)
-                        continue
-                    # broken packet
+                        if error_count > retry:
+                            self.abort()
+                            return None
+                if not self._verify_complement(timeout, sequence):
+                    pass
+                else:
+                    data = self.reader(packet_size + 1 + crc_mode)
+                    if data and len(data) == (packet_size + 1 + crc_mode):
+                        valid, data = self._verify_recv_checksum(crc_mode, data)
+                        # Write the original data to the target file
+                        if valid:
+                            success_count += 1
+                            valid_length = packet_size
+                            if self._remaining_data_length > 0:
+                                valid_length = min(valid_length, self._remaining_data_length)
+                                self._remaining_data_length -= valid_length
+                            write_packet += data[:valid_length]
+                            income_size += len(data)
+                            if len(write_packet) not in (0, 1024, 2048, 3072, 4096):
+                                try:
+                                    stream.write(write_packet)
+                                except IOError as e:
+                                    stream.close()
+                                write_packet = b""
+                            self.writer(ACK)
+                            sequence = (sequence + 1) % 0x100
+                            char = self.reader(1, timeout)
+                            continue
+                        else:
+                            pass
                     else:
                         pass
-                # bad read
-                else:
-                    pass
-            # Receive failed handler: ask for retransmission
-            logger.info("[Receiver]: Error, requesting retransmission (NAK)")
-            while True:
-                data = self.reader(1, timeout)
-                if data is None:
-                    break
-            self.writer(NAK)
-            char = self.reader(1, timeout)
-            continue
+                while True:
+                    data = self.reader(1, timeout)
+                    if data is None:
+                        break
+                self.writer(NAK)
+                char = self.reader(1, timeout)
+                continue
+        except Exception as e:
+            return False
 
     def _in_transfer_mode(self, crc_mode, retry, delay, timeout=1000, cancel=0, error_count=0):
+        gpio1 = Pin(Pin.GPIO28, Pin.OUT, Pin.PULL_DISABLE, 1)
         while True:
+            if gpio1.read() == 0:
+                gpio1.write(1)
+            else:
+                gpio1.write(0)
             if error_count >= retry:
-                logger.info("[Receiver]: Error, error_count reached {}, aborting...".format(retry))
                 self.abort()
                 return None
             elif crc_mode and error_count < (retry // 2):
                 if not self.writer(CRC):
-                    logger.info("[Receiver]: Error, write failed, sleeping for {}".format(delay))
                     time.sleep(delay)
                     error_count += 1
             else:
                 crc_mode = 0
                 if not self.writer(NAK):
-                    logger.info("[Receiver]: Error, write failed, sleeping for {}".format(delay))
                     time.sleep(delay)
                     error_count += 1
             char = self.reader(1, timeout)
             if not len(char):
-                logger.info("[Receiver]: Error, read timeout in info block")
                 error_count += 1
                 continue
             elif char == SOH:
-                logger.info("[Receiver]: Received valid header (SOH)")
                 return char
             elif char == STX:
-                logger.info("[Receiver]: Received valid header (STX)")
                 return char
             elif char == CAN:
                 if cancel:
-                    logger.info("[Receiver]: TRANSMISSION Cancelled (CAN)")
                     return None
                 else:
-                    logger.info("[Receiver]: Ready for transmission cancellation (CAN)")
                     cancel = 1
             else:
-                logger.info("[Receiver]: Error, read char: {}".format(char))
                 error_count += 1
 
-    def _get_file_header(self, char, crc_mode, timeout=1000, retry=10, packet_size=128):  # Ymodem default packet size
+    def _get_file_header(self, char, crc_mode, timeout=1000, retry=10, packet_size=128):
         error_count = 0
         cancel = 0
         while True:
@@ -316,82 +274,60 @@ class Modem(object):
                 if char == SOH:
                     if packet_size != 128:
                         packet_size = 128
-                        logger.info("[Receiver]: Set 128 bytes for packet_size")
                     break
                 elif char == STX:
                     if packet_size != 1024:
                         packet_size = 1024
-                        logger.info("[Receiver]: Set 1024 bytes for packet_size")
                     break
                 elif char == CAN:
                     if cancel:
-                        logger.info("[Receiver]: TRANSMISSION Cancelled (CAN)")
                         return None
                     else:
                         cancel = 1
-                        logger.info("[Receiver]: Ready for transmission cancellation (CAN)")
                 else:
-                    err_msg = ("[Receiver]: Error, expected SOH, EOT but got {0}".format(char))
-                    logger.info(err_msg)
                     error_count += 1
                     if error_count > retry:
-                        logger.info("[Receiver]: Error, error_count reached %d, aborting...".format(retry))
                         self.abort()
                         return None
-            logger.info('[Receiver]: Preparing for data packets....')
-            if not self._verify_complement(packet_size, crc_mode, timeout):
+            if not self._verify_complement(timeout):
                 pass
             else:
-                logger.info("[Receiver]: Read a packet")
                 data = self.reader(packet_size + 1 + crc_mode)
                 if data and len(data) == (packet_size + 1 + crc_mode):
                     valid, data = self._verify_recv_checksum(crc_mode, data)
                     if valid:
                         data = data.lstrip(b"\x00")
                         if not len(data):
-                            # SOH 00 FF NUL[128] CRC CRC
                             self.writer(ACK)
                             return None
                         self._recv_file_name = bytes.decode(data.split(b"\x00")[0], "utf-8")
-                        logger.info("[Receiver]: File - {}".format(self._recv_file_name))
                         self._check_path(self._recv_file_name)
                         try:
                             stream = open(self._recv_file_name, "wb+")
                         except IOError:
-                            # stream.close()
-                            logger.info("[Receiver]: Error, cannot open save path")
                             return None
                         data = bytes.decode(data.split(b"\x00")[1], "utf-8")
                         if self.program_features & USE_LENGTH_FIELD:
                             space_index = data.find(" ")
                             self._remaining_data_length = int(data if space_index == -1 else data[:space_index])
-                            logger.info("[Receiver]: Size - {} bytes".format(self._remaining_data_length))
                             data = data[space_index + 1:]
                         if self.program_features & USE_DATE_FIELD:
                             space_index = data.find(" ")
                             self._recv_file_mtime = int(data if space_index == -1 else data[:space_index], 8)
-                            logger.info("[Receiver]: Mtime - {} seconds".format(self._recv_file_mtime))
                             data = data[space_index + 1:]
                         if self.program_features & USE_MODE_FIELD:
                             space_index = data.find(" ")
                             self._recv_mode = int(data if space_index == -1 else data[:space_index])
-                            logger.info("[Receiver]: Mode - {}".format(self._recv_mode))
                             data = data[space_index + 1:]
                         if self.program_features & USE_SN_FIELD:
                             space_index = data.find(" ")
                             self._recv_sn = int(data if space_index == -1 else data[:space_index])
-                            logger.info("[Receiver]: SN - {}".format(self._recv_sn))
                         self.writer(ACK)
                         return stream
-                    # broken packet
                     else:
                         pass
-                # bad read
                 else:
                     pass
-
-            # Receive failed handler: ask for retransmission
-            logger.info('[Receiver]: Warning, requesting retransmission (NAK)')
             while True:
                 data = self.reader(1, timeout)
                 if data is None:
@@ -413,25 +349,16 @@ class Modem(object):
         if ql_fs.path_exists(path):
             uos.remove(path)
 
-    def _verify_complement(self, packet_size, crc_mode, timeout=1000, sequence=0):
+    def _verify_complement(self, timeout=1000, sequence=0):
         seq1 = self.reader(1, timeout)
         if seq1 is None:
             seq2 = None
-            logger.info("[Receiver]: Warning, read failed to get first sequence byte")
         else:
             seq1 = ord(seq1)
             seq2 = self.reader(1, timeout)
-            if seq2 is None:
-                logger.info("[Receiver]: Warning, read failed to get second sequence byte")
-            else:
+            if seq2 is not None:
                 seq2 = 0xff - ord(seq2)
-        # Packet received in wrong number
         if not (seq1 == seq2 == sequence):
-            logger.info("[Receiver]: Error, expected seq %d but got (seq1 %r, seq2 %r), receiving next block...",
-                        sequence, seq1, seq2)
-            # skip this packet
-            logger.info(self.reader(packet_size + 1 + crc_mode))
-            logger.info("[Receiver]: a wrong packet dropped")
             return False
         else:
             return True
@@ -442,22 +369,17 @@ class Modem(object):
             remote_sum = (_checksum[0] << 8) + _checksum[1]
             local_sum = self._calc_crc(data[:-2])
             valid = bool(remote_sum == local_sum)
-            if not valid:
-                logger.info("[Receiver]: Error, checksum failed (remote %04x, local %04x)", remote_sum, local_sum)
         else:
             _checksum = bytearray([data[-1]])
             remote_sum = _checksum[0]
             local_sum = self._calc_checksum(data[:-1])
             valid = remote_sum == local_sum
-            if not valid:
-                logger.info("[Receiver]: Error, checksum failed (remote %02x, local %02x)", remote_sum, local_sum)
         return valid, data
 
     @staticmethod
     def _calc_checksum(data, checksum=0):
         return (sum(data) + checksum) % 256
 
-    # CRC-16-CCITT
     def _calc_crc(self, data, crc=0):
         for char in bytearray(data):
             crc_tbl_idx = ((crc >> 8) ^ char) & 0xff
@@ -469,7 +391,7 @@ class Modem(object):
 
 
 def enter_ymodem(callback=None):
-    serial_io = Serial(UART.UART2)
+    serial_io = Serial(UART.UART3)
     receiver = Modem(serial_io.read, serial_io.write)
     receiver.recv(callback=callback)
     serial_io.close()

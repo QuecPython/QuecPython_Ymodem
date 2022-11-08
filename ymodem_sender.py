@@ -376,13 +376,16 @@ def send_file(*args):
 
     sender_write(b"import example\r\n")
     sender_write(b"example.exec('/usr/ymodem.py')\r\n")
-    time.sleep(1)
+    time.sleep(2)
     serial_io.read(serial_io.inWaiting())
     file_list = []
     for i in args[1:]:
         file_list.append(i)
     sender = Modem(sender_read, sender_write)
-    sender.send(file_list, callback=None)
+    if sender.send(file_list, callback=None):
+        print("QuecPython File Download Success")
+    else:
+        print("QuecPython File Download Failure")
     serial_io.close()
 
 
