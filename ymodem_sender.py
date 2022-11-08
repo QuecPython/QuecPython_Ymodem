@@ -15,7 +15,7 @@ import serial
 from Protocol import Protocol
 
 logger = logging.getLogger('Modem')
-logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',level=logging.DEBUG,datefmt='%Y-%m-%d %H:%M:%S')
+logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s', level=logging.ERROR, datefmt='%Y-%m-%d %H:%M:%S')
 
 SOH = b'\x01'
 STX = b'\x02'
@@ -164,7 +164,6 @@ class Modem(Protocol):
             crc_mode = self._wait_c(timeout, retry)
             if not crc_mode:
                 return False
-
             # send file body and wait ACK
             sequence = 1
             while True:
@@ -179,7 +178,6 @@ class Modem(Protocol):
                 else:
                     break
                 sequence = (sequence + 1) % 0x100
-
             # send EOT and wait NAK
             self.writer.write(EOT)
             logger.debug("[Sender]: EOT sent and awaiting NAK")
@@ -205,30 +203,21 @@ class Modem(Protocol):
         if self.program_features & USE_LENGTH_FIELD:
             data += bytes(1)
             data += str(info["length"]).encode("utf-8")
-        '''
-        Optional field: Modification Date
-        oct() has different representations of octal numbers in different versions of Python:
-        Python 2+: 0123456
-        Python 3+: 0o123456
-        '''
         if self.program_features & USE_DATE_FIELD:
             mtime = oct(int(info["mtime"]))
             if mtime.startswith("0o"):
                 data += (" " + mtime[2:]).encode("utf-8")
             else:
                 data += (" " + mtime[1:]).encode("utf-8")
-
         # Optional field: Mode
         if self.program_features & USE_MODE_FIELD:
             if info["source"] == "Unix":
                 data += (" " + oct(0x8000)).encode("utf-8")
             else:
                 data += " 0".encode("utf-8")
-
         # Optional field: Serial Number
         if self.program_features & USE_MODE_FIELD:
             data += " 0".encode("utf-8")
-
         data = data.ljust(packet_size, b"\x00")
         checksum = self._make_send_checksum(crc_mode, data)
         return header + data + checksum
@@ -273,7 +262,6 @@ class Modem(Protocol):
                     logger.error("[Sender]: Error, expected NAK, CRC, EOT or CAN but got %r", char)
             else:
                 logger.debug("[Sender]: No valid data was read")
-
             error_count += 1
             if error_count > retry:
                 logger.error("[Sender]: Error, error_count reached {}, aborting...".format(retry))
@@ -388,10 +376,9 @@ def send_file(*args):
 
     sender_write(b"import example\r\n")
     sender_write(b"example.exec('/usr/ymodem.py')\r\n")
-    time.sleep(2)
+    time.sleep(1)
     serial_io.read(serial_io.inWaiting())
-
-    file_list = []       # [["main.py", "/usr/main_1.py"], ["Test-Result.xlsx", "/usr/Test-Result.xlsx"]]
+    file_list = []
     for i in args[1:]:
         file_list.append(i)
     sender = Modem(sender_read, sender_write)
@@ -401,5 +388,4 @@ def send_file(*args):
 
 if __name__ == '__main__':
     fire.Fire(send_file)
-    # ["main.py", "/usr/main_1.py"]
-    # send_file("COM63", ["run_std_1.log", "/usr/run_std_1.log"])
+    # send_file("COM63", ["main.py", "/usr/main_1.py")
