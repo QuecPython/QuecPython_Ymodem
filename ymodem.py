@@ -19,9 +19,7 @@ import uos
 import ql_fs
 import utime as time
 from machine import UART
-from machine import Timer
 from queue import Queue
-from machine import Pin
 
 SOH = b'\x01'
 STX = b'\x02'
@@ -50,7 +48,7 @@ class Serial(object):
 
         self._uart = UART(uart, buadrate, databits, parity, stopbits, flowctl)
         self._queue = Queue(maxsize=1)
-        self._timer = Timer(Timer.Timer1)
+        self._timer = osTimer()
         self._uart.set_callback(self._uart_cb)
 
     def _uart_cb(self, *args):
@@ -70,7 +68,7 @@ class Serial(object):
         if self._uart.any() == 0 and timeout != 0:
             timer_started = False
             if timeout > 0:  # < 0 for wait forever
-                self._timer.start(period=timeout, mode=Timer.ONE_SHOT, callback=self._timer_cb)
+                self._timer.start(timeout, 0, self._timer_cb)
                 timer_started = True
             self._queue.get()
             if timer_started:
@@ -118,7 +116,7 @@ class Modem(object):
         0x7c26, 0x6c07, 0x5c64, 0x4c45, 0x3ca2, 0x2c83, 0x1ce0, 0x0cc1,
         0xef1f, 0xff3e, 0xcf5d, 0xdf7c, 0xaf9b, 0xbfba, 0x8fd9, 0x9ff8,
         0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
-    ]
+    ] # TODO release mem
 
     def __init__(self, reader, writer, mode='ymodem1k'):
         self.reader = reader
@@ -232,12 +230,7 @@ class Modem(object):
             return False
 
     def _in_transfer_mode(self, crc_mode, retry, delay, timeout=1000, cancel=0, error_count=0):
-        gpio1 = Pin(Pin.GPIO28, Pin.OUT, Pin.PULL_DISABLE, 1)
         while True:
-            if gpio1.read() == 0:
-                gpio1.write(1)
-            else:
-                gpio1.write(0)
             if error_count >= retry:
                 self.abort()
                 return None
@@ -387,14 +380,14 @@ class Modem(object):
         return crc & 0xffff
 
     def send(self):
-        pass
+        pass  # TODO
 
 
 def enter_ymodem(callback=None):
-    serial_io = Serial(UART.UART3)
+    serial_io = Serial(UART.UART3) #TODO
     receiver = Modem(serial_io.read, serial_io.write)
     receiver.recv(callback=callback)
-    serial_io.close()
+    serial_io.close()  #TODO
 
 
 if __name__ == '__main__':
