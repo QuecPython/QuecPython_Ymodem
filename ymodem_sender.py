@@ -15,7 +15,7 @@ import serial
 from Protocol import Protocol
 
 logger = logging.getLogger('Modem')
-logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s', level=logging.ERROR, datefmt='%Y-%m-%d %H:%M:%S')
+logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s', level=logging.DEBUG, datefmt='%Y-%m-%d %H:%M:%S')
 
 SOH = b'\x01'
 STX = b'\x02'
@@ -286,7 +286,7 @@ class Modem(Protocol):
     def serial_trans(self, info, timeout=1, retry=10, success_count=1, sequence=None):
         error_count = 0
         # Blocking may occur here, the writer needs to have a timeout mechanism
-        logger.info(info)
+        # logger.info("[Sender]: data: {}".format(info))
         self.writer.write(info)
         logger.debug("[Sender]: Block {} (Seq {}) sent".format(success_count, str(sequence)))
         while True:
@@ -351,7 +351,7 @@ class Modem(Protocol):
 def send_file(*args):
     serial_io = serial.Serial()
     serial_io.port = args[0]
-    serial_io.baudrate = "115200"
+    serial_io.baudrate = "57600"
     serial_io.parity = "N"
     serial_io.bytesize = 8
     serial_io.stopbits = 1
@@ -390,5 +390,5 @@ def send_file(*args):
 
 
 if __name__ == '__main__':
-    fire.Fire(send_file)
-    # send_file("COM63", ["main.py", "/usr/main_1.py")
+    # fire.Fire(send_file)
+    send_file("COM72", '[D:\\work_doc\\2023项目存档\\产测工具\\Factory_test\\QuecPython_Ymodem\\at.ico, /usr/readme.py]')

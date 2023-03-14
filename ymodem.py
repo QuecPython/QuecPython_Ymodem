@@ -14,13 +14,13 @@
 
 # -*- coding:utf-8 -*-
 
-
 import uos
 import ql_fs
 import utime as time
-import osTimer
 from machine import UART
+import osTimer
 from queue import Queue
+
 
 SOH = b'\x01'
 STX = b'\x02'
@@ -41,7 +41,7 @@ ALLOW_YMODEM_G = 0b000001
 class Serial(object):
     def __init__(self,
                  uart,
-                 buadrate=115200,
+                 buadrate=57600,
                  databits=8,
                  parity=0,
                  stopbits=1,
@@ -117,7 +117,7 @@ class Modem(object):
         0x7c26, 0x6c07, 0x5c64, 0x4c45, 0x3ca2, 0x2c83, 0x1ce0, 0x0cc1,
         0xef1f, 0xff3e, 0xcf5d, 0xdf7c, 0xaf9b, 0xbfba, 0x8fd9, 0x9ff8,
         0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
-    ] # TODO release mem
+    ]
 
     def __init__(self, reader, writer, mode='ymodem1k'):
         self.reader = reader
@@ -142,7 +142,7 @@ class Modem(object):
         """
         try:
             stream = None
-            char = self._in_transfer_mode(crc_mode, 100, delay)
+            char = self._in_transfer_mode(crc_mode, retry, delay)
             if char is not None:
                 stream = self._get_file_header(char, crc_mode)
             if stream is not None:
@@ -180,7 +180,7 @@ class Modem(object):
                             char = self.reader(1, timeout)
                     elif char == CAN:
                         if cancel:
-                            self._delete_failed_file(self._recv_file_name)
+                            self._delete_failed_file(self._recv_file_name)    # delete transfer failed file
                             return None
                         else:
                             cancel = 1
@@ -206,13 +206,14 @@ class Modem(object):
                                 self._remaining_data_length -= valid_length
                             write_packet += data[:valid_length]
                             income_size += len(data)
-                            if len(write_packet) not in (0, 1024, 2048, 3072, 4096):
+                            if len(write_packet) not in (0, 1024, 2048, 3072, 4096):     # 4k byte packet write
                                 try:
                                     stream.write(write_packet)
-                                except IOError as e:
+                                except Exception as e:
                                     stream.close()
                                 write_packet = b""
                             self.writer(ACK)
+                            time.sleep_ms(5)
                             sequence = (sequence + 1) % 0x100
                             char = self.reader(1, timeout)
                             continue
@@ -260,7 +261,7 @@ class Modem(object):
             else:
                 error_count += 1
 
-    def _get_file_header(self, char, crc_mode, timeout=1000, retry=10, packet_size=128):
+    def _get_file_header(self, char, crc_mode, timeout=1000, retry=10, packet_size=128):  # Ymodem header default packet size
         error_count = 0
         cancel = 0
         while True:
@@ -299,6 +300,7 @@ class Modem(object):
                         try:
                             stream = open(self._recv_file_name, "wb+")
                         except IOError:
+                            # stream.close()
                             return None
                         data = bytes.decode(data.split(b"\x00")[1], "utf-8")
                         if self.program_features & USE_LENGTH_FIELD:
@@ -352,7 +354,9 @@ class Modem(object):
             seq2 = self.reader(1, timeout)
             if seq2 is not None:
                 seq2 = 0xff - ord(seq2)
+        # Packet received in wrong number
         if not (seq1 == seq2 == sequence):
+            # skip this packet
             return False
         else:
             return True
@@ -381,14 +385,14 @@ class Modem(object):
         return crc & 0xffff
 
     def send(self):
-        pass  # TODO
+        pass
 
 
 def enter_ymodem(callback=None):
-    serial_io = Serial(UART.UART3) #TODO
+    serial_io = Serial(UART.REPL_UART)
     receiver = Modem(serial_io.read, serial_io.write)
     receiver.recv(callback=callback)
-    serial_io.close()  #TODO
+    serial_io.close()
 
 
 if __name__ == '__main__':
