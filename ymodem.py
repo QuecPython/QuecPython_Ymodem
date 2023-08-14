@@ -14,13 +14,14 @@
 
 # -*- coding:utf-8 -*-
 
+
 import uos
 import ql_fs
 import utime as time
-from machine import UART
 import osTimer
+from machine import UART
 from queue import Queue
-
+import gc
 
 SOH = b'\x01'
 STX = b'\x02'
@@ -46,7 +47,6 @@ class Serial(object):
                  parity=0,
                  stopbits=1,
                  flowctl=0):
-
         self._uart = UART(uart, buadrate, databits, parity, stopbits, flowctl)
         self._queue = Queue(maxsize=1)
         self._timer = osTimer()
@@ -117,7 +117,7 @@ class Modem(object):
         0x7c26, 0x6c07, 0x5c64, 0x4c45, 0x3ca2, 0x2c83, 0x1ce0, 0x0cc1,
         0xef1f, 0xff3e, 0xcf5d, 0xdf7c, 0xaf9b, 0xbfba, 0x8fd9, 0x9ff8,
         0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
-    ]
+    ] # TODO release mem
 
     def __init__(self, reader, writer, mode='ymodem1k'):
         self.reader = reader
@@ -180,7 +180,7 @@ class Modem(object):
                             char = self.reader(1, timeout)
                     elif char == CAN:
                         if cancel:
-                            self._delete_failed_file(self._recv_file_name)    # delete transfer failed file
+                            self._delete_failed_file(self._recv_file_name)
                             return None
                         else:
                             cancel = 1
@@ -204,14 +204,16 @@ class Modem(object):
                             if self._remaining_data_length > 0:
                                 valid_length = min(valid_length, self._remaining_data_length)
                                 self._remaining_data_length -= valid_length
+                            gc.collect()
                             write_packet += data[:valid_length]
                             income_size += len(data)
-                            if len(write_packet) not in (0, 1024, 2048, 3072, 4096):     # 4k byte packet write
-                                try:
-                                    stream.write(write_packet)
-                                except Exception as e:
-                                    stream.close()
+                            if len(write_packet) not in (0, 1024, 2048, 3072):
+                                stream.write(write_packet)
                                 write_packet = b""
+                            else:
+                                if self._remaining_data_length == 0:
+                                    stream.write(write_packet)
+                                    write_packet = b""
                             self.writer(ACK)
                             time.sleep_ms(5)
                             sequence = (sequence + 1) % 0x100
@@ -253,6 +255,8 @@ class Modem(object):
                 return char
             elif char == STX:
                 return char
+            elif char == EOT:
+                return char
             elif char == CAN:
                 if cancel:
                     return None
@@ -261,7 +265,7 @@ class Modem(object):
             else:
                 error_count += 1
 
-    def _get_file_header(self, char, crc_mode, timeout=1000, retry=10, packet_size=128):  # Ymodem header default packet size
+    def _get_file_header(self, char, crc_mode, timeout=1000, retry=10, packet_size=128):
         error_count = 0
         cancel = 0
         while True:
@@ -295,12 +299,12 @@ class Modem(object):
                         if not len(data):
                             self.writer(ACK)
                             return None
+                        gc.collect()
                         self._recv_file_name = bytes.decode(data.split(b"\x00")[0], "utf-8")
                         self._check_path(self._recv_file_name)
                         try:
                             stream = open(self._recv_file_name, "wb+")
                         except IOError:
-                            # stream.close()
                             return None
                         data = bytes.decode(data.split(b"\x00")[1], "utf-8")
                         if self.program_features & USE_LENGTH_FIELD:
@@ -354,9 +358,7 @@ class Modem(object):
             seq2 = self.reader(1, timeout)
             if seq2 is not None:
                 seq2 = 0xff - ord(seq2)
-        # Packet received in wrong number
         if not (seq1 == seq2 == sequence):
-            # skip this packet
             return False
         else:
             return True
@@ -385,7 +387,7 @@ class Modem(object):
         return crc & 0xffff
 
     def send(self):
-        pass
+        pass  # TODO
 
 
 def enter_ymodem(callback=None):
