@@ -643,7 +643,7 @@ def receive_file(*args):
         receive_file("COM23", "[/usr/test, D:/Download/test]", "[/usr/test.1, D:/Download/test.1]")
 
     *注意:
-        下载到本地文件的全路径, 分割全部使用"/"进行分割, 不论是windows系统或者linux系统, 如: D:/Download/test,
+        下载到本地文件的全路径, 目录分割全部使用"/"进行分割, 不论是windows系统或者linux系统, 如: D:/Download/test,
         不可使用"\\"进行分割, 如: D:\\Download\\test
         如果使用"\\"进行分割, 需多写一个, 如: D:\\\\Download\\\\test
     """
