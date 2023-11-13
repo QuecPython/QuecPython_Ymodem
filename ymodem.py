@@ -15,21 +15,22 @@
 # -*- coding:utf-8 -*-
 
 
-import uos
-import ql_fs
-import utime as time
-import osTimer
-from machine import UART
-from queue import Queue
 import gc
+import uos
+import sys
+import ql_fs
+import osTimer
+import utime as time
+from queue import Queue
+from machine import UART
 
-SOH = b'\x01'
-STX = b'\x02'
-EOT = b'\x04'
-ACK = b'\x06'
-NAK = b'\x15'
-CAN = b'\x18'
-CRC = b'\x43'
+SOH = b"\x01"
+STX = b"\x02"
+EOT = b"\x04"
+ACK = b"\x06"
+NAK = b"\x15"
+CAN = b"\x18"
+CRC = b"\x43"
 
 USE_LENGTH_FIELD = 0b100000
 USE_DATE_FIELD = 0b010000
@@ -39,18 +40,49 @@ ALLOW_1K_BLOCK = 0b000010
 ALLOW_YMODEM_G = 0b000001
 
 
+# _main_uart_ = UART(UART.UART2, 115200, 8, 0, 1, 0)
+
+
+def _print(data):
+    # _data = data if isinstance(data, bytes) else (data.encode() if isinstance(data, str) else str(data).encode())
+    # _data += b"" if _data.endswith(b"\r\n") else b"\r\n"
+    # _main_uart_.write(_data)
+    pass
+
+
+def check_file():
+    def wrapper(func):
+        def _wrapper(*args, **kwargs):
+            new_args = list()
+            new_args.append(args[0])
+            trans_file = args[1]
+            _files = []
+            for _file in trans_file:
+                source, target = _file.strip("[]").split(",")
+                _print("source: %s, target: %s" % (source, target))
+                if ql_fs.path_exists(source):
+                    file_info = {
+                        "filepath": source,
+                        "name": target.strip(" "),
+                        "length": ql_fs.path_getsize(source),
+                        "mtime": time.mktime(time.localtime()),
+                        "source": "rtos"
+                    }
+                    _files.append(file_info)
+                else:
+                    _print("File [{}] is not exists.".format(source))
+            new_args.append(_files)
+            return func(*tuple(new_args), **kwargs)
+        return _wrapper
+    return wrapper
+
+
 class Serial(object):
-    def __init__(self,
-                 uart,
-                 buadrate=57600,
-                 databits=8,
-                 parity=0,
-                 stopbits=1,
-                 flowctl=0):
+    def __init__(self, uart, buadrate=57600, databits=8, parity=0, stopbits=1, flowctl=0):
         self._uart = UART(uart, buadrate, databits, parity, stopbits, flowctl)
+        self._uart.set_callback(self._uart_cb)
         self._queue = Queue(maxsize=1)
         self._timer = osTimer()
-        self._uart.set_callback(self._uart_cb)
 
     def _uart_cb(self, *args):
         if self._queue.size() == 0:
@@ -64,8 +96,9 @@ class Serial(object):
         return self._uart.write(data)
 
     def read(self, nbytes, timeout=0):
+        # _print("read nbytes %s, timeout %s" % (nbytes, timeout))
         if nbytes == 0:
-            return b''
+            return b""
         if self._uart.any() == 0 and timeout != 0:
             timer_started = False
             if timeout > 0:  # < 0 for wait forever
@@ -117,24 +150,34 @@ class Modem(object):
         0x7c26, 0x6c07, 0x5c64, 0x4c45, 0x3ca2, 0x2c83, 0x1ce0, 0x0cc1,
         0xef1f, 0xff3e, 0xcf5d, 0xdf7c, 0xaf9b, 0xbfba, 0x8fd9, 0x9ff8,
         0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
-    ] # TODO release mem
+    ]  # TODO release mem
 
-    def __init__(self, reader, writer, mode='ymodem1k'):
+    def __init__(self, reader, writer, mode="ymodem1k", program="rzsz"):
+        # Args check.
+        assert mode == "ymodem1k", "Invalid mode specified: %s" % mode
+        assert program in ("rzsz", "rbsb", "pyam", "cyam", "kimp"), "Invalid program specified: %s" % program
+
         self.reader = reader
         self.writer = writer
         self.mode = mode
-        self.program_features = USE_LENGTH_FIELD | USE_DATE_FIELD | USE_MODE_FIELD | ALLOW_1K_BLOCK
+        self.program_features = dict(
+            rzsz=USE_LENGTH_FIELD | USE_DATE_FIELD | USE_MODE_FIELD | ALLOW_1K_BLOCK,
+            rbsb=USE_LENGTH_FIELD | ALLOW_1K_BLOCK,
+            pyam=USE_LENGTH_FIELD | USE_DATE_FIELD | USE_SN_FIELD | ALLOW_1K_BLOCK | ALLOW_YMODEM_G,
+            cyam=ALLOW_1K_BLOCK,
+            kimp=ALLOW_1K_BLOCK,
+        )[program]
         self._recv_file_name = ""
         self._remaining_data_length = 0
         self._recv_file_mtime = 0
         self._recv_mode = 0
         self._recv_sn = 0
+        self.total_size = 0
 
     def abort(self, count=2):
-        for _ in range(count):
-            self.writer(CAN)
+        [self.writer(CAN) for _ in range(count)]
         self._delete_failed_file(self._recv_file_name)
-        return False
+        # return False
 
     def recv(self, crc_mode=1, retry=10, timeout=1000, delay=1, callback=None):
         """
@@ -218,6 +261,7 @@ class Modem(object):
                             time.sleep_ms(5)
                             sequence = (sequence + 1) % 0x100
                             char = self.reader(1, timeout)
+                            _print("After resp ACK read char: %s" % char)
                             continue
                         else:
                             pass
@@ -231,6 +275,7 @@ class Modem(object):
                 char = self.reader(1, timeout)
                 continue
         except Exception as e:
+            sys.print_exception(e)
             return False
 
     def _in_transfer_mode(self, crc_mode, retry, delay, timeout=1000, cancel=0, error_count=0):
@@ -338,15 +383,12 @@ class Modem(object):
 
     @staticmethod
     def _check_path(path):
-        if ql_fs.path_exists(ql_fs.path_dirname(path)):
-            return
-        else:
+        if not ql_fs.path_exists(ql_fs.path_dirname(path)):
             ql_fs.mkdirs(ql_fs.path_dirname(path))
-            return
 
     @staticmethod
-    def _delete_failed_file(path):
-        if ql_fs.path_exists(path):
+    def _delete_failed_file(path=""):
+        if path and ql_fs.path_exists(path):
             uos.remove(path)
 
     def _verify_complement(self, timeout=1000, sequence=0):
@@ -358,10 +400,7 @@ class Modem(object):
             seq2 = self.reader(1, timeout)
             if seq2 is not None:
                 seq2 = 0xff - ord(seq2)
-        if not (seq1 == seq2 == sequence):
-            return False
-        else:
-            return True
+        return (seq1 == seq2 == sequence)
 
     def _verify_recv_checksum(self, crc_mode, data):
         if crc_mode:
@@ -386,8 +425,209 @@ class Modem(object):
             crc = ((crc << 8) ^ self.crc_table[crc_tbl_idx]) & 0xffff
         return crc & 0xffff
 
-    def send(self):
-        pass  # TODO
+    @check_file()
+    def send(self, trans_file, retry=10, timeout=1000, callback=None):
+        packet_size = dict(
+            xmodem=128,
+            xmodem1k=1024,
+            ymodem=128,
+            # Not all but most programs support 1k length
+            ymodem1k=(128, 1024)[(self.program_features & ALLOW_1K_BLOCK) != 0],
+        )[self.mode]
+        self.total_size = sum([i["length"] for i in trans_file])
+        success_count = 0
+        for i in trans_file:
+            _print("trans_file: %s" % str(i))
+            _print("[Sender]: Waiting the mode request and open file...")
+            stream = open(i["filepath"], "rb")
+            # wait C
+            crc_mode = self._wait_c(timeout=timeout, retry=retry)
+            if not crc_mode:
+                return False
+            # send file header SOH and wait ACK
+            _print("[Sender]: Preparing info block")
+            if not self.serial_trans(self._make_file_header_info(128, crc_mode, i), timeout, retry):
+                return False
+            # Data packets
+            _print("[Sender]: Waiting the mode request...")
+            # wait C
+            crc_mode = self._wait_c(timeout=timeout, retry=retry)
+            if not crc_mode:
+                return False
+            # send file body and wait ACK
+            sequence = 1
+            while True:
+                _print("[Sender]: start _make_file_body_info")
+                data, length = self._make_file_body_info(stream, packet_size, crc_mode, sequence)
+                _print("[Sender]: end _make_file_body_info")
+                if data:
+                    if not self.serial_trans(data, timeout, retry, success_count, sequence):
+                        return False
+                    else:
+                        success_count += length
+                        if callable(callback):
+                            callback(self.total_size, success_count, i["name"])
+                else:
+                    break
+                sequence = (sequence + 1) % 0x100
+            # send EOT and wait NAK
+            self.writer(EOT)
+            _print("[Sender]: EOT sent and awaiting NAK")
+            if not self._wait_nak_ack(NAK):
+                return False
+            # send EOT and wait ACK
+            self.writer(EOT)
+            _print("[Sender]: EOT sent and awaiting ACK")
+            if not self._wait_nak_ack(ACK):
+                return False
+            # send end frame and wait ACK
+            _print("[Sender]: Transmission finished (ACK)")
+            stream.close()
+        self._send_end_packet(128)
+        _print("[Sender]: Received %r" % self.reader(1))
+        return True
+
+    def _wait_c(self, cancel=0, timeout=10 * 1000, retry=10):
+        error_count, crc_mode = 0, 0
+        while True:
+            # Blocking may occur here, the reader needs to have a timeout mechanism
+            char = self.reader(1, timeout)
+            if char:
+                if char == NAK:
+                    crc_mode = 0
+                    _print("[Sender]: Received checksum request (NAK)")
+                    return crc_mode
+                elif char == CRC:
+                    crc_mode = 1
+                    _print("[Sender]: Received CRC request (C/CRC)")
+                    return crc_mode
+                elif char == CAN:
+                    if cancel:
+                        _print("[Sender]: Transmission cancelled (CAN)")
+                        return False
+                    else:
+                        cancel = 1
+                        _print("[Sender]: Ready for transmission cancellation (CAN)")
+                elif char == EOT:
+                    _print("[Sender]: Transmission cancelled (EOT)")
+                    return False
+                else:
+                    _print("[Sender]: Error, expected NAK, CRC, EOT or CAN but got %r" % char)
+            else:
+                _print("[Sender]: No valid data was read")
+            error_count += 1
+            if error_count > retry:
+                _print("[Sender]: Error, error_count reached {}, aborting...".format(retry))
+                self.abort()
+                return False
+
+    def _make_file_header_info(self, packet_size, crc_mode, info=None):
+        _print("_make_file_header_info")
+        # Required field: Name
+        header = self._make_send_header(packet_size, 0)
+        _print("1 target name %s" % info["name"])
+        data = info["name"].encode("utf-8")
+        _print("2 target name %s" % data)
+        # Optional field: Length
+        if self.program_features & USE_LENGTH_FIELD:
+            data += bytes(1)
+            data += str(info["length"]).encode("utf-8")
+        if self.program_features & USE_DATE_FIELD:
+            mtime = oct(int(info["mtime"]))
+            if mtime.startswith("0o"):
+                data += (" " + mtime[2:]).encode("utf-8")
+            else:
+                data += (" " + mtime[1:]).encode("utf-8")
+        # Optional field: Mode
+        if self.program_features & USE_MODE_FIELD:
+            if info["source"] == "Unix":
+                data += (" " + oct(0x8000)).encode("utf-8")
+            else:
+                data += " 0".encode("utf-8")
+        # Optional field: Serial Number
+        if self.program_features & USE_MODE_FIELD:
+            data += " 0".encode("utf-8")
+        data += (b"\x00" * ((packet_size - len(data)) if packet_size > len(data) else 0))
+        checksum = self._make_send_checksum(crc_mode, data)
+        return (header + data + checksum)
+
+    @staticmethod
+    def _make_send_header(packet_size, sequence):
+        _print("_make_send_header")
+        assert packet_size in (128, 1024), packet_size
+        _bytes = []
+        if packet_size == 128:
+            _bytes.append(ord(SOH))
+        elif packet_size == 1024:
+            _bytes.append(ord(STX))
+        _bytes.extend([sequence, 0xff - sequence])
+        return bytearray(_bytes)
+
+    def _make_send_checksum(self, crc_mode, data):
+        _print("_make_send_checksum")
+        _bytes = []
+        if crc_mode:
+            crc = self._calc_crc(data)
+            _bytes.extend([crc >> 8, crc & 0xff])
+        else:
+            crc = self._calc_checksum(data)
+            _bytes.append(crc)
+        return bytearray(_bytes)
+
+    def serial_trans(self, info, timeout=1000, retry=10, success_count=1, sequence=None):
+        error_count = 0
+        # Blocking may occur here, the writer needs to have a timeout mechanism
+        _print("[Sender]: data: {}".format(info))
+        self.writer(info)
+        _print("[Sender]: Block {} (Seq {}) sent".format(success_count, str(sequence)))
+        while True:
+            char = self.reader(1, timeout)
+            _print("[Sender]: reader resp char {}".format(char))
+            if char == ACK:
+                return True
+            elif char == NAK:   # 接收端写文件异常直接中断
+                return False
+            else:
+                _print("[Sender]: error, expected ACK but got {} for block {}".format(char, str(sequence)))
+                error_count += 1
+                time.sleep_ms(timeout)
+                if error_count > retry:
+                    _print("[Sender]: Error, NAK received {} times, aborting...".format(error_count))
+                    self.abort()
+                    return False
+
+    def _make_file_body_info(self, stream, packet_size, crc_mode, sequence):
+        data = stream.read(packet_size)
+        if not data:
+            _print("[Sender]: Reached EOF")
+            return False, 0
+        length = len(data)
+        header = self._make_send_header(packet_size, sequence)
+        data += (b"\x1a" * ((packet_size - length) if packet_size > length else 0))
+        checksum = self._make_send_checksum(crc_mode, data)
+        return header + data + checksum, length
+
+    def _wait_nak_ack(self, flags, timeout=10000, retry=10):
+        error_count = 0
+        while True:
+            char = self.reader(1, timeout)
+            if char == flags:
+                _print("[Sender]: Received %r" % flags)
+                return True
+            else:
+                _print("[Sender]: Error, expected %r but got %r" % (flags, char))
+                error_count += 1
+                if error_count > retry:
+                    _print("[Sender]: Warning, EOT was not %r, aborting transfer..." % flags)
+                    self.abort()
+                    return False
+
+    def _send_end_packet(self, packet_size, crc_mode=1):
+        header = self._make_send_header(packet_size, 0)
+        data = packet_size * b"\x00"
+        checksum = self._make_send_checksum(crc_mode, data)
+        _print(header + data + checksum)
+        self.writer(header + data + checksum)
 
 
 def enter_ymodem(callback=None):
@@ -397,5 +637,15 @@ def enter_ymodem(callback=None):
     serial_io.close()
 
 
-if __name__ == '__main__':
+def send_file(trans_file):
+    serial_io = Serial(UART.REPL_UART)
+    sender = Modem(serial_io.read, serial_io.write)
+    try:
+        sender.send(trans_file)
+    except Exception as e:
+        _print(str(e))
+    serial_io.close()
+
+
+if __name__ == "__main__":
     enter_ymodem()
