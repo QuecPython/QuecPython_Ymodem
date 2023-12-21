@@ -39,15 +39,17 @@ USE_SN_FIELD = 0b000100
 ALLOW_1K_BLOCK = 0b000010
 ALLOW_YMODEM_G = 0b000001
 
+DEBUG = False
 
-# _main_uart_ = UART(UART.UART2, 115200, 8, 0, 1, 0)
+_MAIN_UART_ = UART(UART.UART2, 115200, 8, 0, 1, 0) if DEBUG else None
 
 
 def _print(data):
-    # _data = data if isinstance(data, bytes) else (data.encode() if isinstance(data, str) else str(data).encode())
-    # _data += b"" if _data.endswith(b"\r\n") else b"\r\n"
-    # _main_uart_.write(_data)
-    pass
+    global DEBUG, _MAIN_UART_
+    if DEBUG:
+        _data = data if isinstance(data, bytes) else (data.encode() if isinstance(data, str) else str(data).encode())
+        _data += b"" if _data.endswith(b"\r\n") else b"\r\n"
+        _MAIN_UART_.write(_data)
 
 
 def check_file():
@@ -631,14 +633,14 @@ class Modem(object):
 
 
 def enter_ymodem(callback=None):
-    serial_io = Serial(UART.REPL_UART)
+    serial_io = Serial(UART.REPL_UART if hasattr(UART, "REPL_UART") else UART.UART3)
     receiver = Modem(serial_io.read, serial_io.write)
     receiver.recv(callback=callback)
     serial_io.close()
 
 
 def send_file(trans_file):
-    serial_io = Serial(UART.REPL_UART)
+    serial_io = Serial(UART.REPL_UART if hasattr(UART, "REPL_UART") else UART.UART3)
     sender = Modem(serial_io.read, serial_io.write)
     try:
         sender.send(trans_file)
