@@ -39,7 +39,7 @@ USE_SN_FIELD = 0b000100
 ALLOW_1K_BLOCK = 0b000010
 ALLOW_YMODEM_G = 0b000001
 
-DEBUG = False
+DEBUG = True
 
 _MAIN_UART_ = UART(UART.UART2, 115200, 8, 0, 1, 0) if DEBUG else None
 
@@ -487,6 +487,7 @@ class Modem(object):
             stream.close()
         self._send_end_packet(128)
         _print("[Sender]: Received %r" % self.reader(1))
+        time.sleep(1)
         return True
 
     def _wait_c(self, cancel=0, timeout=10 * 1000, retry=10):
