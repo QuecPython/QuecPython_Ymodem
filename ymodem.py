@@ -24,6 +24,9 @@ import utime as time
 from queue import Queue
 from machine import UART
 
+name, platform = uos.uname()[1].split("=",1)
+platform=platform.split("_",1)[0]
+
 SOH = b"\x01"
 STX = b"\x02"
 EOT = b"\x04"
@@ -216,6 +219,7 @@ class Modem(object):
                         if cancel:
                             self.writer(ACK)
                             stream.close()
+                            stream = None
                             if callable(callback):
                                 callback(self._recv_file_name, income_size)
                             self.recv()
@@ -241,6 +245,18 @@ class Modem(object):
                     pass
                 else:
                     data = self.reader(packet_size + 1 + crc_mode)
+                    if platform == "FCM360W" or platform == "FCM362K":
+                        retry_times = 10
+                        while len(data) < (packet_size + 1 + crc_mode):
+                            lost_data_len = packet_size + 1 + crc_mode - len(data)
+                            buf = self.reader(lost_data_len, timeout)
+                            data += buf
+                            if buf == b'':
+                                retry_times -= 1
+                            else:
+                                retry_times = 10
+                            if retry_times <= 0:
+                                break       
                     if data and len(data) == (packet_size + 1 + crc_mode):
                         valid, data = self._verify_recv_checksum(crc_mode, data)
                         # Write the original data to the target file
@@ -264,10 +280,13 @@ class Modem(object):
                             time.sleep_ms(5)
                             sequence = (sequence + 1) % 0x100
                             char = self.reader(1, timeout)
+                            del(data)
                             continue
                         else:
+                            del(data)
                             pass
                     else:
+                        del(data)
                         pass
                 while True:
                     data = self.reader(1, timeout)
@@ -277,6 +296,8 @@ class Modem(object):
                 char = self.reader(1, timeout)
                 continue
         except Exception as e:
+            if stream:
+                stream.close()
             sys.print_exception(e)
             return False
 
@@ -339,6 +360,21 @@ class Modem(object):
                 pass
             else:
                 data = self.reader(packet_size + 1 + crc_mode)
+                if platform == "FCM360W" or platform == "FCM362K":
+                    retry_times = 5
+                    while len(data) < (packet_size + 1 + crc_mode):
+                        lost_data_len = packet_size + 1 + crc_mode - len(data)
+                        while self._uart.any() < lost_data_len:
+                            time.sleep_ms(10)
+                            retry_times -= 1
+                            if retry_times <= 0:
+                                break
+                        buf = self.reader(lost_data_len, timeout)
+                        data += buf
+                        if buf == b'':
+                            break
+                        else:
+                            retry_times = 5
                 if data and len(data) == (packet_size + 1 + crc_mode):
                     valid, data = self._verify_recv_checksum(crc_mode, data)
                     if valid:
@@ -379,6 +415,9 @@ class Modem(object):
                 data = self.reader(1, timeout)
                 if data is None:
                     break
+                if platform == "FCM360W" or platform == "FCM362K":
+                    if data == b'':
+                        return None
             self.writer(NAK)
             char = self.reader(1, timeout)
             continue
@@ -436,6 +475,8 @@ class Modem(object):
             # Not all but most programs support 1k length
             ymodem1k=(128, 1024)[(self.program_features & ALLOW_1K_BLOCK) != 0],
         )[self.mode]
+        if "BG95" in platform:
+            packet_size = 128
         self.total_size = sum([i["length"] for i in trans_file])
         success_count = 0
         for i in trans_file:
@@ -588,7 +629,7 @@ class Modem(object):
             _print("[Sender]: reader resp char {}".format(char))
             if char == ACK:
                 return True
-            elif char == NAK:   # 接收端写文件异常直接中断
+            elif char == NAK:   # 鎺ユ敹绔啓鏂囦欢寮傚父鐩存帴涓柇
                 return False
             else:
                 _print("[Sender]: error, expected ACK but got {} for block {}".format(char, str(sequence)))
@@ -634,14 +675,20 @@ class Modem(object):
 
 
 def enter_ymodem(callback=None):
-    serial_io = Serial(UART.REPL_UART if hasattr(UART, "REPL_UART") else UART.UART3)
+    if platform == "FCM360W" or platform == "FCM362K":
+        serial_io = Serial(UART.REPL_UART, buadrate=115200)
+    else:
+        serial_io = Serial(UART.REPL_UART if hasattr(UART, "REPL_UART") else UART.UART3)
     receiver = Modem(serial_io.read, serial_io.write)
     receiver.recv(callback=callback)
     serial_io.close()
 
 
 def send_file(trans_file):
-    serial_io = Serial(UART.REPL_UART if hasattr(UART, "REPL_UART") else UART.UART3)
+    if platform == "FCM360W" or platform == "FCM362K":
+        serial_io = Serial(UART.REPL_UART, buadrate=115200)
+    else:
+        serial_io = Serial(UART.REPL_UART if hasattr(UART, "REPL_UART") else UART.UART3)
     sender = Modem(serial_io.read, serial_io.write)
     try:
         sender.send(trans_file)
